@@ -14,6 +14,7 @@ import android.net.Network;
 import android.net.RouteInfo;
 import android.os.Bundle;
 import android.os.Handler;
+import android.os.Looper;
 import android.provider.Settings;
 
 import android.text.Editable;
@@ -31,6 +32,8 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 import android.widget.CheckBox;
+import android.widget.RadioButton;
+import android.widget.RadioGroup;
 
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AlertDialog;
@@ -53,6 +56,16 @@ import okhttp3.Response;
 import pl.droidsonroids.gif.GifImageView;
 
 public class MainActivity extends AppCompatActivity {
+
+    private static final String KEY_DATE_TIME_MODE = "date_time_mode";
+    private static final String MODE_AUTO = "AUTO";
+    private static final String MODE_MANUAL = "MANUAL";
+    private static final String MODE_NONE = "NONE";
+
+    private Handler dateTimeHandler;
+    private Runnable autoDateTimeRunnable;
+    private TextWatcher dateTextWatcher;
+    private TextWatcher timeTextWatcher;
 
     private static final String DATE_TIME_PREFS = "DATE_TIME_OPTIONS";
     private static final String KEY_INCLUDE_DATE = "include_date";
@@ -124,7 +137,9 @@ public class MainActivity extends AppCompatActivity {
         gifImageView = findViewById(R.id.gifImageView);
 
         editTexts = new ArrayList<>();
-        for (int id : new int[]{R.id.editText1, R.id.editText2, R.id.editText3, R.id.editText4, R.id.editText5, R.id.editText6, R.id.editText7, R.id.editText8, R.id.editText9, R.id.editText10, R.id.editText11, R.id.editText12, R.id.editText13, R.id.editText14, R.id.editText15, R.id.editText16, R.id.editText17}) {
+        for (int id : new int[]{R.id.editText1, R.id.editText2, R.id.editText3, R.id.editText4, R.id.editText5, R.id.editText6,
+                R.id.editText7, R.id.editText8, R.id.editText9, R.id.editText10, R.id.editText11, R.id.editText12, R.id.editText13,
+                R.id.editText14, R.id.editText15, R.id.editText16, R.id.editText17}) {
             editTexts.add(findViewById(id));
         }
 
@@ -145,36 +160,18 @@ public class MainActivity extends AppCompatActivity {
     }
 
     // === Date/Time auto-fill + numeric input validation ===
-    @SuppressWarnings("deprecation")
     private void setupEditTexts() {
-        EditText dateEdit = editTexts.get(0);
-        EditText timeEdit = editTexts.get(1);
 
-        dateEdit.setInputType(InputType.TYPE_NULL);
-        timeEdit.setInputType(InputType.TYPE_NULL);
-        dateEdit.setFocusable(false);
-        timeEdit.setFocusable(false);
+        InputFilter[] dateTimeFilter = {new InputFilter.LengthFilter(8)};   // DD.MM.YY / HH:MM:SS
+        editTexts.get(0).setFilters(dateTimeFilter);
+        editTexts.get(1).setFilters(dateTimeFilter);
 
-        Handler handler = new Handler();
-        Runnable updateRunnable = new Runnable() {
-            @Override
-            public void run() {
-                Calendar calendar = Calendar.getInstance();
+        createDateTextWatcher();
+        createTimeTextWatcher();
 
-                int day = calendar.get(Calendar.DAY_OF_MONTH);
-                int month = calendar.get(Calendar.MONTH) + 1;
-                int year = calendar.get(Calendar.YEAR) % 100;
-                dateEdit.setText(String.format(Locale.getDefault(), "%02d.%02d.%02d", day, month, year));
-
-                int hour = calendar.get(Calendar.HOUR_OF_DAY);
-                int minute = calendar.get(Calendar.MINUTE);
-                int second = calendar.get(Calendar.SECOND);
-                timeEdit.setText(String.format(Locale.getDefault(), "%02d:%02d:%02d", hour, minute, second));
-
-                handler.postDelayed(this, 1000);
-            }
-        };
-        handler.post(updateRunnable);
+        String savedMode = getSharedPreferences(DATE_TIME_PREFS, MODE_PRIVATE)
+                .getString(KEY_DATE_TIME_MODE, MODE_AUTO);
+        applyDateTimeMode(savedMode);
 
         // Numeric fields start at index 2
         for (int i = 2; i < editTexts.size(); i++) {
@@ -199,6 +196,7 @@ public class MainActivity extends AppCompatActivity {
             });
         }
     }
+
 
     // === Rows 21-40 (extra text fields, saved separately) ===
     private void setupExtraRows() {
@@ -273,6 +271,154 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    private void applyDateTimeMode(String mode) {
+        EditText dateEdit = editTexts.get(0);
+        EditText timeEdit = editTexts.get(1);
+
+        stopAutoDateTimeUpdater();
+        dateEdit.removeTextChangedListener(dateTextWatcher);
+        timeEdit.removeTextChangedListener(timeTextWatcher);
+
+        if (MODE_AUTO.equals(mode)) {
+            dateEdit.setInputType(InputType.TYPE_NULL);
+            timeEdit.setInputType(InputType.TYPE_NULL);
+            dateEdit.setFocusable(false);
+            timeEdit.setFocusable(false);
+            startAutoDateTimeUpdater();
+        } else if (MODE_NONE.equals(mode)) {
+            // Fields are hidden by applyDateTimeVisibility(); just make sure nothing is running or editable
+            dateEdit.setFocusable(false);
+            timeEdit.setFocusable(false);
+        } else {
+            dateEdit.setInputType(InputType.TYPE_CLASS_NUMBER);
+            timeEdit.setInputType(InputType.TYPE_CLASS_NUMBER);
+            dateEdit.setFocusable(true);
+            dateEdit.setFocusableInTouchMode(true);
+            timeEdit.setFocusable(true);
+            timeEdit.setFocusableInTouchMode(true);
+            dateEdit.addTextChangedListener(dateTextWatcher);
+            timeEdit.addTextChangedListener(timeTextWatcher);
+        }
+    }
+    private void startAutoDateTimeUpdater() {
+        stopAutoDateTimeUpdater();
+        if (dateTimeHandler == null) dateTimeHandler = new Handler(Looper.getMainLooper());
+
+        autoDateTimeRunnable = new Runnable() {
+            @Override
+            public void run() {
+                Calendar calendar = Calendar.getInstance();
+
+                int day = calendar.get(Calendar.DAY_OF_MONTH);
+                int month = calendar.get(Calendar.MONTH) + 1;
+                int year = calendar.get(Calendar.YEAR) % 100;
+                editTexts.get(0).setText(String.format(Locale.getDefault(), "%02d.%02d.%02d", day, month, year));
+
+                int hour = calendar.get(Calendar.HOUR_OF_DAY);
+                int minute = calendar.get(Calendar.MINUTE);
+                int second = calendar.get(Calendar.SECOND);
+                editTexts.get(1).setText(String.format(Locale.getDefault(), "%02d:%02d:%02d", hour, minute, second));
+
+                dateTimeHandler.postDelayed(this, 1000);
+            }
+        };
+        dateTimeHandler.post(autoDateTimeRunnable);
+    }
+
+    private void stopAutoDateTimeUpdater() {
+        if (dateTimeHandler != null && autoDateTimeRunnable != null) {
+            dateTimeHandler.removeCallbacks(autoDateTimeRunnable);
+        }
+    }
+
+    // Manual entry formatting: DD.MM.YY
+    private void createDateTextWatcher() {
+        EditText dateEdit = editTexts.get(0);
+        dateTextWatcher = new TextWatcher() {
+            private boolean isFormatting = false;
+
+            @Override
+            public void afterTextChanged(Editable s) {
+                if (isFormatting || s == null) return;
+
+                String clean = s.toString().replace(".", "");
+                if (clean.length() > 6) return;
+
+                isFormatting = true;
+
+                StringBuilder builder = new StringBuilder();
+                for (int i = 0; i < clean.length(); i++) {
+                    builder.append(clean.charAt(i));
+                    if ((i == 1 || i == 3) && i != clean.length() - 1) builder.append('.');
+                }
+
+                dateEdit.setText(builder.toString());
+                dateEdit.setSelection(builder.length());
+
+                if (clean.length() >= 4) {
+                    try {
+                        int day = Integer.parseInt(clean.substring(0, 2));
+                        int month = Integer.parseInt(clean.substring(2, 4));
+                        if (day < 1 || day > 31 || month < 1 || month > 12) {
+                            Toast.makeText(MainActivity.this, "Please enter a valid Date", Toast.LENGTH_SHORT).show();
+                        }
+                    } catch (NumberFormatException ignored) {}
+                }
+                isFormatting = false;
+            }
+
+            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+            @Override public void onTextChanged(CharSequence s, int start, int before, int count) {}
+        };
+    }
+
+    // Manual entry formatting: HH:MM:SS
+    private void createTimeTextWatcher() {
+        EditText timeEdit = editTexts.get(1);
+        timeTextWatcher = new TextWatcher() {
+            private boolean isFormatting = false;
+
+            @Override
+            public void afterTextChanged(Editable s) {
+                if (isFormatting || s == null) return;
+
+                String clean = s.toString().replace(":", "");
+                if (clean.length() > 6) return;
+
+                isFormatting = true;
+
+                StringBuilder builder = new StringBuilder();
+                for (int i = 0; i < clean.length(); i++) {
+                    builder.append(clean.charAt(i));
+                    if ((i == 1 || i == 3) && i != clean.length() - 1) builder.append(':');
+                }
+
+                timeEdit.setText(builder.toString());
+                timeEdit.setSelection(builder.length());
+
+                try {
+                    if (clean.length() >= 4) {
+                        int hour = Integer.parseInt(clean.substring(0, 2));
+                        int minute = Integer.parseInt(clean.substring(2, 4));
+                        if (hour > 23 || minute > 59) {
+                            Toast.makeText(MainActivity.this, "Please enter a valid Time", Toast.LENGTH_SHORT).show();
+                        }
+                    }
+                    if (clean.length() == 6) {
+                        int second = Integer.parseInt(clean.substring(4, 6));
+                        if (second > 59) {
+                            Toast.makeText(MainActivity.this, "Please enter a valid Time", Toast.LENGTH_SHORT).show();
+                        }
+                    }
+                } catch (NumberFormatException ignored) {}
+                isFormatting = false;
+            }
+
+            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+            @Override public void onTextChanged(CharSequence s, int start, int before, int count) {}
+        };
+    }
+
     // === Show/hide the DATE and TIME fields independently, based on saved checkboxes ===
     private void applyDateTimeVisibility() {
         SharedPreferences dtPrefs = getSharedPreferences(DATE_TIME_PREFS, MODE_PRIVATE);
@@ -295,29 +441,88 @@ public class MainActivity extends AppCompatActivity {
     // === Date/Time inclusion options dialog ===
     private void showDateTimeOptionsDialog() {
         SharedPreferences prefs = getSharedPreferences(DATE_TIME_PREFS, MODE_PRIVATE);
+        String savedMode = prefs.getString(KEY_DATE_TIME_MODE, MODE_AUTO);
         boolean includeDate = prefs.getBoolean(KEY_INCLUDE_DATE, true);
         boolean includeTime = prefs.getBoolean(KEY_INCLUDE_TIME, true);
 
         View dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_date_time_options, null);
+        RadioGroup radioGroup = dialogView.findViewById(R.id.radioGroupDateTimeMode);
+        RadioButton radioAutomatic = dialogView.findViewById(R.id.radioAutomatic);
+        RadioButton radioNone = dialogView.findViewById(R.id.radioNone);
+        RadioButton radioManual = dialogView.findViewById(R.id.radioManual);
         CheckBox checkboxIncludeDate = dialogView.findViewById(R.id.checkboxIncludeDate);
         CheckBox checkboxIncludeTime = dialogView.findViewById(R.id.checkboxIncludeTime);
 
-        checkboxIncludeDate.setChecked(includeDate);
-        checkboxIncludeTime.setChecked(includeTime);
+        boolean wasManual = MODE_MANUAL.equals(savedMode);
 
-        new AlertDialog.Builder(this).setTitle("Date/Time Options").setView(dialogView).setPositiveButton("Save", (dialog, which) -> {
-            boolean newIncludeDate = checkboxIncludeDate.isChecked();
-            boolean newIncludeTime = checkboxIncludeTime.isChecked();
+        // Saved include flags only mean something in Manual mode; otherwise start with both ticked
+        checkboxIncludeDate.setChecked(!wasManual || includeDate);
+        checkboxIncludeTime.setChecked(!wasManual || includeTime);
 
-            prefs.edit().putBoolean(KEY_INCLUDE_DATE, newIncludeDate).putBoolean(KEY_INCLUDE_TIME, newIncludeTime).apply();
+        if (MODE_AUTO.equals(savedMode)) radioAutomatic.setChecked(true);
+        else if (MODE_NONE.equals(savedMode)) radioNone.setChecked(true);
+        else radioManual.setChecked(true);
 
-            // Show/hide the DATE and TIME fields on screen right away
+        // Date/Time checkboxes are only usable under Manual
+        Runnable updateCheckboxState = () -> {
+            boolean manual = radioManual.isChecked();
+            checkboxIncludeDate.setEnabled(manual);
+            checkboxIncludeTime.setEnabled(manual);
+        };
+        updateCheckboxState.run();
+        radioGroup.setOnCheckedChangeListener((group, checkedId) -> updateCheckboxState.run());
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("Date/Time Options")
+                .setView(dialogView)
+                .setPositiveButton("Save", null)   // overridden below so the dialog can stay open on invalid input
+                .setNegativeButton("Cancel", null)
+                .create();
+        dialog.show();
+
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+            String newMode;
+            boolean newIncludeDate;
+            boolean newIncludeTime;
+
+            if (radioAutomatic.isChecked()) {
+                newMode = MODE_AUTO;
+                newIncludeDate = true;
+                newIncludeTime = true;
+            } else if (radioNone.isChecked()) {
+                newMode = MODE_NONE;
+                newIncludeDate = false;
+                newIncludeTime = false;
+            } else {
+                newMode = MODE_MANUAL;
+                newIncludeDate = checkboxIncludeDate.isChecked();
+                newIncludeTime = checkboxIncludeTime.isChecked();
+
+                if (!newIncludeDate && !newIncludeTime) {
+                    Toast.makeText(this, "Select Date, Time or both", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+            }
+
+            // Entering Manual from Auto/None: start with empty fields instead of the last auto value
+            if (MODE_MANUAL.equals(newMode) && !wasManual) {
+                editTexts.get(0).setText("");
+                editTexts.get(1).setText("");
+            }
+
+            prefs.edit()
+                    .putString(KEY_DATE_TIME_MODE, newMode)
+                    .putBoolean(KEY_INCLUDE_DATE, newIncludeDate)
+                    .putBoolean(KEY_INCLUDE_TIME, newIncludeTime)
+                    .apply();
+
+            applyDateTimeMode(newMode);
             applyDateTimeVisibility();
 
             Toast.makeText(this, "Date/Time preferences saved", Toast.LENGTH_SHORT).show();
-        }).setNegativeButton("Cancel", null).show();
+            dialog.dismiss();
+        });
     }
-
     // === Wi-Fi settings dialog ===
     private void showSettingsDialog() {
         EditText ssid = new EditText(this), pass = new EditText(this);
@@ -498,8 +703,23 @@ public class MainActivity extends AppCompatActivity {
     }
 
     @Override
+    protected void onPause() {
+        super.onPause();
+        stopAutoDateTimeUpdater();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        String mode = getSharedPreferences(DATE_TIME_PREFS, MODE_PRIVATE)
+                .getString(KEY_DATE_TIME_MODE, MODE_AUTO);
+        if (MODE_AUTO.equals(mode)) startAutoDateTimeUpdater();
+    }
+
+    @Override
     protected void onDestroy() {
         super.onDestroy();
+        stopAutoDateTimeUpdater();
         unregisterReceiver(wifiReceiver);
     }
 
