@@ -271,6 +271,12 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    private void setChildrenEnabled(ViewGroup layout, boolean enabled) {
+        for (int i = 0; i < layout.getChildCount(); i++) {
+            layout.getChildAt(i).setEnabled(enabled);
+        }
+    }
+
     private void applyDateTimeMode(String mode) {
         EditText dateEdit = editTexts.get(0);
         EditText timeEdit = editTexts.get(1);
@@ -432,11 +438,7 @@ public class MainActivity extends AppCompatActivity {
         rowTimeGroup.setVisibility(includeTime ? View.VISIBLE : View.GONE);
     }
 
-    private void setChildrenEnabled(ViewGroup layout, boolean enabled) {
-        for (int i = 0; i < layout.getChildCount(); i++) {
-            layout.getChildAt(i).setEnabled(enabled);
-        }
-    }
+
 
     // === Date/Time inclusion options dialog ===
     private void showDateTimeOptionsDialog() {
